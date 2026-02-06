@@ -180,8 +180,10 @@ else:
 
     st.divider()
     
-    # Force Progress
+   # Force Progress
     st.subheader("Team Management")
     for t in ["A", "B", "C"]:
         if st.button(f"Force Team {t} to Next Week"):
-            latest = supabase.table("beer_game").select("week").eq("team", t).order("
+            latest = supabase.table("beer_game").select("week").eq("team", t).order("week", desc=True).limit(1).execute()
+            process_team_advance(t, latest.data[0]['week'], forced=True)
+            st.success(f"Team {t} Advanced")
