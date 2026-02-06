@@ -57,7 +57,15 @@ if view == "Student Portal":
     role = st.selectbox("Select Role", ["Retailer", "Wholesaler", "Distributor", "Factory"])
     
     # Get latest data
-    data = supabase.table("beer_game").select("*").eq("team", team).eq("role", role).order("week", desc=True).limit(1).execute().data[0]
+   # 1. Get the response from Supabase
+response = supabase.table("beer_game").select("*").eq("team", team).eq("role", role).order("week", desc=True).limit(1).execute()
+
+# 2. Check if the list of data has anything in it before accessing [0]
+if len(response.data) > 0:
+    data = response.data[0]
+else:
+    st.error(f"Error: No data found for Team {team} and Role {role}. Check your Supabase table!")
+    st.stop() # This stops the app gracefully instead of crashing
 
     if data['order_placed'] is not None:
         st.info(f"Week {data['week']} submitted. Waiting for your team...")
