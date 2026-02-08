@@ -9,21 +9,27 @@ URL = st.secrets["SUPABASE_URL"]
 KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(URL, KEY)
 
-# 2. THE MATH ENGINE (2-Week Lead Time Logic)
+# 2. THE MATH ENGINE (2-Week Lead Time + Auto-Demand Shock)
 def process_team_advance(team_name, week, forced=False):
     res = supabase.table("beer_game").select("*").eq("team", team_name).eq("week", week).execute()
     players = {p['role']: p for p in res.data}
     submitted_roles = [p['role'] for p in res.data if p['order_placed'] is not None]
     
-    # Block manual advancement unless all 4 roles are ready (or forced by instructor)
     if not forced and len(submitted_roles) < 4:
         return 
 
+    # --- AUTO DEMAND LOGIC ---
+    # If the week is > 5, demand jumps to 8. Otherwise, it uses the Instructor's set demand.
     settings = supabase.table("game_settings").select("current_demand").eq("id", 1).single().execute()
-    cust_demand = settings.data['current_demand']
-    roles = ['Retailer', 'Wholesaler', 'Distributor', 'Manufacturer']
     
-    # GHOST PLAYER LOGIC: If a role has no input, simulate a random order
+    if week >= 5:
+        cust_demand = 8
+        # Sync the database setting so the Instructor sees the change
+        supabase.table("game_settings").update({"current_demand": 8}).eq("id", 1).execute()
+    else:
+        cust_demand = settings.data['current_demand']
+
+    roles = ['Retailer', 'Wholesaler', 'Distributor', 'Manufacturer']
     current_orders = {r: (players[r]['order_placed'] if players[r]['order_placed'] is not None else random.randint(3, 7)) for r in roles}
 
     for i, role in enumerate(roles):
@@ -33,7 +39,7 @@ def process_team_advance(team_name, week, forced=False):
         shipped = min(p['inventory'], total_needed)
         new_backlog = total_needed - shipped
         
-        # 2-WEEK LEAD TIME: Arrival today is what was ordered in (Current Week - 1)
+        # 2-WEEK LEAD TIME
         prev_res = supabase.table("beer_game").select("order_placed").eq("team", team_name).eq("role", role).eq("week", week - 1).execute()
         incoming = prev_res.data[0]['order_placed'] if prev_res.data and prev_res.data[0]['order_placed'] is not None else 4
         
@@ -64,7 +70,7 @@ try:
 except:
     game_active = False; market_demand = 4
 
-# --- WINDOW 1: IDENTITY ---
+# --- LANDING & JOIN SCREENS (Same as previous) ---
 if st.session_state.page == "landing":
     st.title("🍺 Beer Game Simulator")
     if st.button("STUDENT PORTAL", use_container_width=True, type="primary"):
@@ -72,34 +78,29 @@ if st.session_state.page == "landing":
     if st.button("INSTRUCTOR LOGIN", use_container_width=True):
         st.session_state.page = "instructor_dashboard"; st.rerun()
 
-# --- WINDOW 2: STUDENT JOIN ---
 elif st.session_state.page == "student_join" and not st.session_state.joined:
     with st.container(border=True):
         st.subheader("Join a Team")
         t_choice = st.selectbox("Team", ["A", "B", "C"])
         r_choice = st.selectbox("Role", ["Retailer", "Wholesaler", "Distributor", "Manufacturer"])
         name = st.text_input("Name")
-        
         check = supabase.table("beer_game").select("player_name").eq("team", t_choice).eq("role", r_choice).order("week", desc=True).limit(1).execute()
         is_taken = any(p.get('player_name') for p in check.data) if (check.data and check.data[0]['player_name']) else False
-        
         if is_taken: st.error("❌ Position already occupied.")
         if st.button("JOIN GAME", type="primary", use_container_width=True, disabled=not name or is_taken):
             supabase.table("beer_game").update({"player_name": name}).eq("team", t_choice).eq("role", r_choice).execute()
             st.session_state.update({"team": t_choice, "role": r_choice, "name": name, "joined": True})
             st.rerun()
 
-# --- WINDOW 3: STUDENT DASHBOARD ---
+# --- STUDENT DASHBOARD ---
 elif st.session_state.page == "student_join" and st.session_state.joined:
     if not game_active:
         st.info("🕒 Waiting for instructor to start..."); time.sleep(3); st.rerun()
 
     res = supabase.table("beer_game").select("*").eq("team", st.session_state.team).eq("role", st.session_state.role).order("week", desc=True).limit(1).execute()
-    
     if res.data:
         curr = res.data[0]
         st.subheader(f"📊 {st.session_state.role} | Week {curr['week']}")
-
         col1, col2 = st.columns(2)
         with col1:
             st.metric("📦 Stock", int(curr['inventory']), f"{int(curr['backlog'])} Backlog", delta_color="inverse")
@@ -107,11 +108,9 @@ elif st.session_state.page == "student_join" and st.session_state.joined:
         with col2:
             st.metric("🏗️ Incoming Delivery", curr.get('incoming_delivery', 4))
             st.metric("🚚 Outgoing Transport", curr.get('last_shipped', 0))
-
         st.divider()
         st.metric("💰 Total Cost", f"${int(curr['total_cost'])}")
         st.progress(min(curr['total_cost'] / 1000, 1.0))
-
         with st.container(border=True):
             if curr['order_placed'] is None:
                 val = st.number_input("Order Quantity", min_value=0, step=1, value=4)
@@ -122,11 +121,10 @@ elif st.session_state.page == "student_join" and st.session_state.joined:
             else:
                 st.success("Order locked. Waiting for next week..."); time.sleep(5); st.rerun()
 
-# --- WINDOW 4: INSTRUCTOR DASHBOARD ---
+# --- INSTRUCTOR DASHBOARD (WITH AUTO-SHOCK INDICATOR) ---
 elif st.session_state.page == "instructor_dashboard":
     st.title("🎮 Instructor Panel")
     if st.text_input("Password", type="password") == "beer123":
-        
         c1, c2 = st.columns(2)
         with c1:
             if st.button("START / STOP GAME", type="primary", use_container_width=True):
@@ -141,8 +139,12 @@ elif st.session_state.page == "instructor_dashboard":
                 st.rerun()
 
         st.divider()
-        new_demand = st.slider("Set Market Demand", 0, 20, int(market_demand))
-        if st.button("Apply New Demand"):
+        st.subheader("Market Demand Control")
+        if market_demand == 8:
+            st.warning("⚡ AUTO-SHOCK ACTIVE: Demand is now locked at 8 (Week 5+ reached).")
+        
+        new_demand = st.slider("Manual Demand Adjustment", 0, 20, int(market_demand))
+        if st.button("Update Demand Manually"):
             supabase.table("game_settings").update({"current_demand": new_demand}).eq("id", 1).execute(); st.rerun()
 
         st.divider()
@@ -150,7 +152,5 @@ elif st.session_state.page == "instructor_dashboard":
         for t in ["A", "B", "C"]:
             latest = supabase.table("beer_game").select("week").eq("team", t).order("week", desc=True).limit(1).execute()
             current_w = latest.data[0]['week'] if latest.data else 1
-            
-            # The Week Number is now inside the button label
             if st.button(f"Advance Team {t} (Currently Week {current_w})", use_container_width=True):
                 process_team_advance(t, current_w, forced=True); st.rerun()
