@@ -46,7 +46,7 @@ def process_team_advance(team_name, week, forced=False):
             "inventory": new_inv, "backlog": new_backlog,
             "total_cost": p['total_cost'] + weekly_cost,
             "order_placed": None,
-            "player_name": p.get('player_name'), # Carry over the name to the next week
+            "player_name": p.get('player_name'),
             "last_shipped": shipped,
             "last_demand": demand_val,
             "incoming_delivery": incoming
@@ -80,42 +80,32 @@ if st.session_state.page == "landing":
     if st.button("INSTRUCTOR DASHBOARD", use_container_width=True):
         st.session_state.page = "instructor_dashboard"; st.rerun()
 
-# --- WINDOW 2: STUDENT JOIN (WITH DUPLICATE BLOCKING) ---
+# --- WINDOW 2: STUDENT JOIN ---
 elif st.session_state.page == "student_join" and not st.session_state.joined:
     with st.container(border=True):
         st.subheader("Join a Team")
-        t_choice = st.selectbox("Select Team", ["A", "B", "C"])
-        r_choice = st.selectbox("Select Role", ["Retailer", "Wholesaler", "Distributor", "Manufacturer"])
-        
-        # CHECK IF TAKEN: Look for any player name already assigned to this role in the latest week
-        check = supabase.table("beer_game").select("player_name").eq("team", t_choice).eq("role", r_choice).not_.is_("player_name", "null").order("week", desc=True).limit(1).execute()
-        
-        is_taken = len(check.data) > 0 and check.data[0]['player_name'] is not None and check.data[0]['player_name'] != ""
-        
-        if is_taken:
-            st.error(f"❌ The {r_choice} position for Team {t_choice} is already taken by {check.data[0]['player_name']}.")
-            name = st.text_input("Enter Your Name", disabled=True)
-            st.button("POSITION TAKEN", disabled=True, use_container_width=True)
-        else:
-            name = st.text_input("Enter Your Name")
-            if st.button("ENTER LOBBY", type="primary", use_container_width=True, disabled=not name):
-                # Update all weeks for this team/role with the name to ensure consistency
-                supabase.table("beer_game").update({"player_name": name}).eq("team", t_choice).eq("role", r_choice).execute()
-                st.session_state.update({"team": t_choice, "role": r_choice, "name": name, "joined": True})
-                st.rerun()
+        t_choice = st.selectbox("Team", ["A", "B", "C"])
+        r_choice = st.selectbox("Role", ["Retailer", "Wholesaler", "Distributor", "Manufacturer"])
+        name = st.text_input("Enter Your Name")
+        if st.button("ENTER LOBBY", type="primary", use_container_width=True):
+            supabase.table("beer_game").update({"player_name": name}).eq("team", t_choice).eq("role", r_choice).execute()
+            st.session_state.update({"team": t_choice, "role": r_choice, "name": name, "joined": True})
+            st.rerun()
 
 # --- WINDOW 3: STUDENT DASHBOARD ---
 elif st.session_state.page == "student_join" and st.session_state.joined:
     if not game_active:
-        st.info(f"🕒 Welcome {st.session_state.name}! Waiting for instructor to start Team {st.session_state.team}..."); time.sleep(3); st.rerun()
+        st.info("🕒 Waiting for the instructor..."); time.sleep(3); st.rerun()
 
     res = supabase.table("beer_game").select("*").eq("team", st.session_state.team).eq("role", st.session_state.role).order("week", desc=True).limit(1).execute()
     if res.data:
         curr = res.data[0]
         st.subheader(f"📊 {st.session_state.role} | Week {curr['week']}")
         
+        # Calculate Weekly Cost for display
         weekly_c = (curr['inventory'] * 0.5) + (curr['backlog'] * 1.0)
         
+        # Metric Grid
         col1, col2 = st.columns(2)
         with col1:
             st.metric("📦 Stock Level", int(curr['inventory']), f"{int(curr['backlog'])} Backlog", delta_color="inverse")
@@ -125,6 +115,8 @@ elif st.session_state.page == "student_join" and st.session_state.joined:
             st.metric("🚚 Outgoing Transport", curr.get('last_shipped', 0))
         
         st.divider()
+        
+        # --- COST DISPLAY WITH COLOR CODING ---
         c_left, c_right = st.columns(2)
         with c_left:
             color_w = "cost-high" if weekly_c > 10 else "cost-normal"
@@ -141,7 +133,7 @@ elif st.session_state.page == "student_join" and st.session_state.joined:
                     process_team_advance(st.session_state.team, curr['week'])
                     st.rerun()
             else:
-                st.success("Order submitted. Waiting for teammates..."); time.sleep(5); st.rerun()
+                st.success("Order submitted. Waiting..."); time.sleep(5); st.rerun()
 
 # --- WINDOW 4: INSTRUCTOR DASHBOARD ---
 elif st.session_state.page == "instructor_dashboard":
@@ -152,7 +144,7 @@ elif st.session_state.page == "instructor_dashboard":
             if st.button("START / STOP GAME", type="primary", use_container_width=True):
                 supabase.table("game_settings").update({"game_active": not game_active}).eq("id", 1).execute(); st.rerun()
         with c2:
-            if st.button("♻️ FULL RESET (Clear All Players)", use_container_width=True):
+            if st.button("♻️ RESET SYSTEM", use_container_width=True):
                 supabase.table("beer_game").delete().neq("week", -1).execute()
                 for t in ["A", "B", "C"]:
                     for r in ["Retailer", "Wholesaler", "Distributor", "Manufacturer"]:
@@ -160,8 +152,15 @@ elif st.session_state.page == "instructor_dashboard":
                 supabase.table("game_settings").update({"game_active": False, "current_demand": 4}).eq("id", 1).execute()
                 st.rerun()
 
+        # Graphs and Analytics
         st.divider()
-        # Instructor analytics and advancement logic remains the same...
+        graph_res = supabase.table("beer_game").select("team", "role", "week", "inventory", "order_placed", "total_cost").order("week").execute()
+        if graph_res.data:
+            df = pd.DataFrame(graph_res.data)
+            team_sel = st.selectbox("View Team", ["A", "B", "C"])
+            st.line_chart(df[df['team'] == team_sel].pivot(index='week', columns='role', values='inventory'))
+
+        st.divider()
         for t in ["A", "B", "C"]:
             latest = supabase.table("beer_game").select("week").eq("team", t).order("week", desc=True).limit(1).execute()
             w = latest.data[0]['week'] if latest.data else 1
