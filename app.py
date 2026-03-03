@@ -94,16 +94,18 @@ if st.session_state.page == "landing":
         if st.button("INSTRUCTOR DASHBOARD", use_container_width=True):
             st.session_state.page = "instructor_dashboard"; st.rerun()
 
-# --- WINDOW 2: STUDENT JOIN (DUPLICATE BLOCKING) ---
+# --- WINDOW 2: STUDENT JOIN ---
 elif st.session_state.page == "student_join" and not st.session_state.joined:
     with st.container(border=True):
         st.subheader("Team Registration")
         t_choice = st.selectbox("Select Team", ["A", "B", "C"])
         r_choice = st.selectbox("Select Role", ["Retailer", "Wholesaler", "Distributor", "Manufacturer"])
         
-        # Check if role is taken in latest week
-        check = supabase.table("beer_game").select("player_name").eq("team", t_choice).eq("role", r_choice).not_.is_("player_name", "null").order("week", desc=True).limit(1).execute()
-        is_taken = len(check.data) > 0 and check.data[0]['player_name']
+        # FIXED QUERY
+        check = supabase.table("beer_game").select("player_name").eq("team", t_choice).eq("role", r_choice).neq("player_name", "null").order("week", desc=True).limit(1).execute()
+        
+        # Add secondary check for empty strings
+        is_taken = len(check.data) > 0 and check.data[0]['player_name'] not in [None, "", "null"]
         
         if is_taken:
             st.error(f"❌ Position taken by: {check.data[0]['player_name']}")
@@ -114,7 +116,6 @@ elif st.session_state.page == "student_join" and not st.session_state.joined:
                 supabase.table("beer_game").update({"player_name": name}).eq("team", t_choice).eq("role", r_choice).execute()
                 st.session_state.update({"team": t_choice, "role": r_choice, "name": name, "joined": True})
                 st.rerun()
-
 # --- WINDOW 3: STUDENT DASHBOARD ---
 elif st.session_state.page == "student_join" and st.session_state.joined:
     if not game_active:
