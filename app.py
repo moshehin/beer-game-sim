@@ -9,17 +9,15 @@ URL = st.secrets["SUPABASE_URL"]
 KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(URL, KEY)
 
-# 2. THE MATH ENGINE (2-Week Lead Time + Auto-Demand Shock)
+# 2. THE MATH ENGINE
 def process_team_advance(team_name, week, forced=False):
     res = supabase.table("beer_game").select("*").eq("team", team_name).eq("week", week).execute()
     players = {p['role']: p for p in res.data}
     submitted_roles = [p['role'] for p in res.data if p['order_placed'] is not None]
     
-    # Wait for all 4 unless forced by Instructor
     if not forced and len(submitted_roles) < 4:
         return 
 
-    # --- AUTO DEMAND LOGIC (Week 5 Shock) ---
     if week >= 5:
         cust_demand = 8
         supabase.table("game_settings").update({"current_demand": 8}).eq("id", 1).execute()
@@ -37,7 +35,6 @@ def process_team_advance(team_name, week, forced=False):
         shipped = min(p['inventory'], total_needed)
         new_backlog = total_needed - shipped
         
-        # 2-WEEK LEAD TIME
         prev_res = supabase.table("beer_game").select("order_placed").eq("team", team_name).eq("role", role).eq("week", week - 1).execute()
         incoming = prev_res.data[0]['order_placed'] if prev_res.data and prev_res.data[0]['order_placed'] is not None else 4
         
@@ -55,14 +52,32 @@ def process_team_advance(team_name, week, forced=False):
             "incoming_delivery": incoming
         }).execute()
 
-# 3. UI THEME & CSS
-st.set_page_config(page_title="Beer Game Simulator", layout="centered", initial_sidebar_state="collapsed")
+# 3. LIGHT THEME & INDUSTRIAL UI
+st.set_page_config(page_title="Supply Chain Sim", layout="centered", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
+    /* Global Styles for Light Theme Visibility */
+    .stApp { background-color: #f8f9fa; color: #212529; }
     [data-testid='stSidebar'] {display: none;} 
-    .stMetric {background-color: #1e1e1e; border-radius: 10px; padding: 15px; border: 1px solid #333;}
-    .cost-normal { color: #00FF00; font-weight: bold; font-size: 1.1rem; }
-    .cost-high { color: #FF4B4B; font-weight: bold; font-size: 1.1rem; }
+    
+    /* Industrial Metric Cards */
+    .stMetric {
+        background-color: #ffffff; 
+        border-radius: 8px; 
+        padding: 20px; 
+        border-left: 5px solid #007bff;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    
+    /* Cost Indicators */
+    .cost-normal { color: #28a745; font-weight: bold; font-size: 1.1rem; }
+    .cost-high { color: #dc3545; font-weight: bold; font-size: 1.1rem; }
+    
+    /* Title Styling */
+    h1, h2, h3 { color: #343a40 !important; }
+    
+    /* Success/Info Box Tweaks */
+    .stAlert { border-radius: 10px; border: none; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -77,30 +92,34 @@ except:
 
 # --- WINDOW 1: LANDING ---
 if st.session_state.page == "landing":
-    st.title("🍺 Beer Game: A Supply Chain Simulator")
-    st.write("Master the bullwhip effect in this 4-stage distribution simulation.")
-    if st.button("STUDENT PORTAL", use_container_width=True, type="primary"):
-        st.session_state.page = "student_join"; st.rerun()
-    if st.button("INSTRUCTOR DASHBOARD", use_container_width=True):
-        st.session_state.page = "instructor_dashboard"; st.rerun()
+    st.title("🏭 Beer Game: Supply Chain Simulator")
+    st.subheader("Distribution Network & Logistics Management")
+    st.write("Optimize inventory levels across the four stages of the supply chain to minimize total system costs.")
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("📦 STUDENT ENTRANCE", use_container_width=True, type="primary"):
+            st.session_state.page = "student_join"; st.rerun()
+    with col_b:
+        if st.button("⚙️ INSTRUCTOR CONSOLE", use_container_width=True):
+            st.session_state.page = "instructor_dashboard"; st.rerun()
 
 # --- WINDOW 2: STUDENT JOIN ---
 elif st.session_state.page == "student_join" and not st.session_state.joined:
     with st.container(border=True):
-        st.subheader("Team Registration")
-        t_choice = st.selectbox("Select Team", ["A", "B", "C"])
-        r_choice = st.selectbox("Select Role", ["Retailer", "Wholesaler", "Distributor", "Manufacturer"])
+        st.subheader("Assign Role in Chain")
+        t_choice = st.selectbox("Assign Team", ["A", "B", "C"])
+        r_choice = st.selectbox("Select Business Unit", ["Retailer", "Wholesaler", "Distributor", "Manufacturer"])
         
-        # Check if role is taken using robust filter
         check = supabase.table("beer_game").select("player_name").eq("team", t_choice).eq("role", r_choice).neq("player_name", "null").order("week", desc=True).limit(1).execute()
         is_taken = len(check.data) > 0 and check.data[0]['player_name'] not in [None, "", "null"]
         
         if is_taken:
-            st.error(f"❌ Position taken by: {check.data[0]['player_name']}")
-            st.button("LOCKED", disabled=True, use_container_width=True)
+            st.error(f"⚠️ Position Occupied: {check.data[0]['player_name']}")
+            st.button("UNIT LOCKED", disabled=True, use_container_width=True)
         else:
-            name = st.text_input("Enter Your Name")
-            if st.button("JOIN GAME", type="primary", use_container_width=True, disabled=not name):
+            name = st.text_input("Personnel Name")
+            if st.button("INITIALIZE UNIT", type="primary", use_container_width=True, disabled=not name):
                 supabase.table("beer_game").update({"player_name": name}).eq("team", t_choice).eq("role", r_choice).execute()
                 st.session_state.update({"team": t_choice, "role": r_choice, "name": name, "joined": True})
                 st.rerun()
@@ -108,53 +127,53 @@ elif st.session_state.page == "student_join" and not st.session_state.joined:
 # --- WINDOW 3: STUDENT DASHBOARD ---
 elif st.session_state.page == "student_join" and st.session_state.joined:
     if not game_active:
-        st.info(f"🕒 Welcome, {st.session_state.name}. Waiting for instructor..."); time.sleep(3); st.rerun()
+        st.info(f"🏗️ Welcome, {st.session_state.name}. Awaiting distribution network activation..."); time.sleep(3); st.rerun()
 
     res = supabase.table("beer_game").select("*").eq("team", st.session_state.team).eq("role", st.session_state.role).order("week", desc=True).limit(1).execute()
     if res.data:
         curr = res.data[0]
-        st.subheader(f"📊 {st.session_state.role} | Week {curr['week']}")
+        st.header(f"🏢 {st.session_state.role} Unit")
+        st.markdown(f"**Operating Week:** {curr['week']} | **Team:** {st.session_state.team}")
         
-        # Metrics 2x2
         c1, c2 = st.columns(2)
         with c1:
-            st.metric("📦 Stock", int(curr['inventory']), f"{int(curr['backlog'])} Backlog", delta_color="inverse")
-            st.metric("📥 Customer Order", market_demand if st.session_state.role == "Retailer" else curr.get('last_demand', 0))
+            st.metric("📦 Inventory Level", int(curr['inventory']), f"{int(curr['backlog'])} Unfilled Backlog", delta_color="inverse")
+            st.metric("📥 Downstream Order", market_demand if st.session_state.role == "Retailer" else curr.get('last_demand', 0))
         with c2:
-            st.metric("🏗️ Incoming Delivery", curr.get('incoming_delivery', 4))
-            st.metric("🚚 Outgoing Transport", curr.get('last_shipped', 0))
+            st.metric("🏗️ Incoming Cargo", curr.get('incoming_delivery', 4))
+            st.metric("🚚 Outgoing Shipment", curr.get('last_shipped', 0))
         
-        # Cost Logic
         st.divider()
         weekly_c = (curr['inventory'] * 0.5) + (curr['backlog'] * 1.0)
         cl, cr = st.columns(2)
         with cl:
             cw = "cost-high" if weekly_c > 10 else "cost-normal"
-            st.markdown(f"Weekly Cost: <span class='{cw}'>${weekly_c:.2f}</span>", unsafe_allow_html=True)
+            st.markdown(f"**Period Cost:** <span class='{cw}'>${weekly_c:.2f}</span>", unsafe_allow_html=True)
         with cr:
             ct = "cost-high" if curr['total_cost'] > 100 else "cost-normal"
-            st.markdown(f"Total Cost: <span class='{ct}'>${curr['total_cost']:.2f}</span>", unsafe_allow_html=True)
+            st.markdown(f"**Cumulative Cost:** <span class='{ct}'>${curr['total_cost']:.2f}</span>", unsafe_allow_html=True)
 
         with st.container(border=True):
             if curr['order_placed'] is None:
-                val = st.number_input("Order Quantity", min_value=0, step=1, value=4)
-                if st.button("PLACE ORDER", type="primary", use_container_width=True):
+                val = st.number_input("Procurement Order Quantity", min_value=0, step=1, value=4)
+                if st.button("AUTHORIZE ORDER", type="primary", use_container_width=True):
                     supabase.table("beer_game").update({"order_placed": val}).eq("id", curr['id']).execute()
                     process_team_advance(st.session_state.team, curr['week'])
                     st.rerun()
             else:
-                st.success("Order locked. Awaiting teammates..."); time.sleep(5); st.rerun()
+                st.success("🚚 Order dispatched. Awaiting supply chain sync..."); time.sleep(5); st.rerun()
 
 # --- WINDOW 4: INSTRUCTOR DASHBOARD ---
 elif st.session_state.page == "instructor_dashboard":
-    st.title("🎮 Instructor Control Room")
-    if st.text_input("Admin Password", type="password") == "beer123":
+    st.title("🛡️ Logistics Command Center")
+    if st.text_input("Admin Credentials", type="password") == "beer123":
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("START / STOP SESSION", type="primary", use_container_width=True):
+            btn_text = "⏹️ HALT OPERATIONS" if game_active else "▶️ START OPERATIONS"
+            if st.button(btn_text, type="primary", use_container_width=True):
                 supabase.table("game_settings").update({"game_active": not game_active}).eq("id", 1).execute(); st.rerun()
         with c2:
-            if st.button("♻️ FULL SYSTEM RESET", use_container_width=True):
+            if st.button("♻️ RESET ENTIRE GRID", use_container_width=True):
                 supabase.table("beer_game").delete().neq("week", -1).execute()
                 for t in ["A", "B", "C"]:
                     for r in ["Retailer", "Wholesaler", "Distributor", "Manufacturer"]:
@@ -162,32 +181,23 @@ elif st.session_state.page == "instructor_dashboard":
                 supabase.table("game_settings").update({"game_active": False, "current_demand": 4}).eq("id", 1).execute()
                 st.rerun()
 
-        # Lobby
         st.divider()
-        st.subheader("👥 Joined Students")
-        roster = supabase.table("beer_game").select("team", "role", "player_name").neq("player_name", "null").order("team").execute()
-        if roster.data: st.table(pd.DataFrame(roster.data).drop_duplicates())
-
-        # Graphs with Duplicate Safety
-        st.divider()
-        st.subheader("📈 Supply Chain Analytics")
+        st.subheader("📈 Supply Chain Flux")
         graph_data = supabase.table("beer_game").select("*").order("week").execute()
         if graph_data.data:
             df = pd.DataFrame(graph_data.data)
-            t_sel = st.selectbox("Select Team", ["A", "B", "C"])
+            t_sel = st.selectbox("Analyze Team Network", ["A", "B", "C"])
             tdf = df[df['team'] == t_sel]
-            
-            # 
-            tabs = st.tabs(["Stock", "Orders", "Delivery", "Cost"])
+            tabs = st.tabs(["Inventory", "Order Waves", "Shipments", "Cost Accumulation"])
             with tabs[0]: st.line_chart(tdf.pivot_table(index='week', columns='role', values='inventory', aggfunc='max'))
             with tabs[1]: st.line_chart(tdf.pivot_table(index='week', columns='role', values='order_placed', aggfunc='max'))
             with tabs[2]: st.line_chart(tdf.pivot_table(index='week', columns='role', values='incoming_delivery', aggfunc='max'))
             with tabs[3]: st.line_chart(tdf.pivot_table(index='week', columns='role', values='total_cost', aggfunc='max'))
 
-        # Advancement
         st.divider()
+        st.subheader("Team Synchronization")
         for t in ["A", "B", "C"]:
             latest = supabase.table("beer_game").select("week").eq("team", t).order("week", desc=True).limit(1).execute()
             w_num = latest.data[0]['week'] if latest.data else 1
-            if st.button(f"Advance Team {t} (Currently W{w_num})", use_container_width=True):
+            if st.button(f"Advance Team {t} to Week {w_num + 1}", use_container_width=True):
                 process_team_advance(t, w_num, forced=True); st.rerun()
