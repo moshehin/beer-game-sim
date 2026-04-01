@@ -11,16 +11,14 @@ supabase = create_client(URL, KEY)
 
 # 2. THE MATH ENGINE (2-Week Lead Time + Auto-Demand Shock)
 def process_team_advance(team_name, week, forced=False):
-    # Fetch current week's data for all 4 roles
     res = supabase.table("beer_game").select("*").eq("team", team_name).eq("week", week).execute()
     players = {p['role']: p for p in res.data}
     submitted_roles = [p['role'] for p in res.data if p['order_placed'] is not None]
     
-    # Wait for all 4 unless forced by Instructor
     if not forced and len(submitted_roles) < 4:
         return 
 
-    # --- AUTO DEMAND LOGIC (Week 5 Shock) ---
+    # Demand Logic: Week 5 Shock or Manual Setting
     if week >= 5:
         cust_demand = 8
         supabase.table("game_settings").update({"current_demand": 8}).eq("id", 1).execute()
@@ -29,7 +27,6 @@ def process_team_advance(team_name, week, forced=False):
         cust_demand = settings.data['current_demand']
 
     roles = ['Retailer', 'Wholesaler', 'Distributor', 'Manufacturer']
-    # Use 4 as default order if a player hasn't joined yet
     current_orders = {r: (players[r]['order_placed'] if players[r]['order_placed'] is not None else 4) for r in roles}
 
     for i, role in enumerate(roles):
@@ -39,14 +36,13 @@ def process_team_advance(team_name, week, forced=False):
         shipped = min(p['inventory'], total_needed)
         new_backlog = total_needed - shipped
         
-        # 2-WEEK LEAD TIME (Arrival is the order placed 1 week ago)
+        # 2-WEEK LEAD TIME
         prev_res = supabase.table("beer_game").select("order_placed").eq("team", team_name).eq("role", role).eq("week", week - 1).execute()
         incoming = prev_res.data[0]['order_placed'] if prev_res.data and prev_res.data[0]['order_placed'] is not None else 4
         
         new_inv = (p['inventory'] - shipped) + incoming
         weekly_cost = (new_inv * 0.5) + (new_backlog * 1.0)
         
-        # Insert Week + 1
         supabase.table("beer_game").insert({
             "team": team_name, "role": role, "week": week + 1,
             "inventory": new_inv, "backlog": new_backlog,
@@ -59,7 +55,7 @@ def process_team_advance(team_name, week, forced=False):
         }).execute()
 
 # 3. UI THEME & LIGHT MODE CSS
-st.set_page_config(page_title="Supply Chain Sim", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Operations Club: Beer Game", layout="centered", initial_sidebar_state="collapsed")
 st.markdown("""
     <style>
     .stApp { background-color: #fcfcfc; color: #333; }
@@ -80,145 +76,8 @@ st.markdown("""
 if 'page' not in st.session_state: st.session_state.page = "landing"
 if 'joined' not in st.session_state: st.session_state.joined = False
 
-# Fetch Game Global Settings
 try:
     s_res = supabase.table("game_settings").select("*").eq("id", 1).single().execute()
     game_active = s_res.data['game_active']
     market_demand = s_res.data['current_demand']
 except:
-    game_active = False; market_demand = 4
-
-# --- WINDOW 1: LANDING ---
-if st.session_state.page == "landing":
-    st.title("🏭 Beer Game: Supply Chain Simulator")
-    st.subheader("Operations Club Challenge")
-    st.write("Optimize your distribution network and minimize costs in this 20-week logistics simulation.")
-    
-    c_a, c_b = st.columns(2)
-    with c_a:
-        if st.button("📦 STUDENT PORTAL", use_container_width=True, type="primary"):
-            st.session_state.page = "student_join"; st.rerun()
-    with c_b:
-        if st.button("🛡️ COMMAND CENTER", use_container_width=True):
-            st.session_state.page = "instructor_dashboard"; st.rerun()
-
-# --- WINDOW 2: STUDENT JOIN ---
-elif st.session_state.page == "student_join" and not st.session_state.joined:
-    with st.container(border=True):
-        st.subheader("Join a Business Unit")
-        t_choice = st.selectbox("Select Team", ["A", "B", "C"])
-        r_choice = st.selectbox("Select Role", ["Retailer", "Wholesaler", "Distributor", "Manufacturer"])
-        
-        # Check if taken using robust filter
-        check = supabase.table("beer_game").select("player_name").eq("team", t_choice).eq("role", r_choice).neq("player_name", "null").order("week", desc=True).limit(1).execute()
-        is_taken = len(check.data) > 0 and check.data[0]['player_name'] not in [None, "", "null"]
-        
-        if is_taken:
-            st.error(f"⚠️ Position Occupied by: {check.data[0]['player_name']}")
-            st.button("UNIT LOCKED", disabled=True, use_container_width=True)
-        else:
-            name = st.text_input("Enter Personnel Name")
-            if st.button("INITIALIZE UNIT", type="primary", use_container_width=True, disabled=not name):
-                supabase.table("beer_game").update({"player_name": name}).eq("team", t_choice).eq("role", r_choice).execute()
-                st.session_state.update({"team": t_choice, "role": r_choice, "name": name, "joined": True})
-                st.rerun()
-
-# --- WINDOW 3: STUDENT DASHBOARD ---
-elif st.session_state.page == "student_join" and st.session_state.joined:
-    if not game_active:
-        st.info(f"🏗️ Welcome, {st.session_state.name}. Awaiting distribution network activation..."); time.sleep(4); st.rerun()
-
-    res = supabase.table("beer_game").select("*").eq("team", st.session_state.team).eq("role", st.session_state.role).order("week", desc=True).limit(1).execute()
-    
-    if res.data:
-        curr = res.data[0]
-        wk = curr['week']
-
-        # --- TERMINATION AT WEEK 20 ---
-        if wk > 20:
-            st.balloons()
-            st.header("🏁 20-Week Audit Complete")
-            st.success(f"Simulation has ended for {st.session_state.role} (Team {st.session_state.team}).")
-            f1, f2 = st.columns(2)
-            f1.metric("Final Total Cost", f"${curr['total_cost']:.2f}")
-            f2.metric("Ending Stock", int(curr['inventory']))
-            st.info("The instructor will now review the Bullwhip Analytics.")
-            st.stop()
-
-        st.header(f"🏢 {st.session_state.role} Dashboard")
-        st.markdown(f"**Operating Week:** {wk} / 20 | **Team:** {st.session_state.team}")
-        
-        # Metrics 2x2
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("📦 Inventory Level", int(curr['inventory']), f"{int(curr['backlog'])} Backlog", delta_color="inverse")
-            st.metric("📥 Customer Order", market_demand if st.session_state.role == "Retailer" else curr.get('last_demand', 0))
-        with c2:
-            st.metric("🏗️ Incoming Cargo", curr.get('incoming_delivery', 4))
-            st.metric("🚚 Outgoing Shipment", curr.get('last_shipped', 0))
-        
-        # Cost Logic
-        st.divider()
-        weekly_c = (curr['inventory'] * 0.5) + (curr['backlog'] * 1.0)
-        cl, cr = st.columns(2)
-        with cl:
-            cw = "cost-high" if weekly_c > 10 else "cost-normal"
-            st.markdown(f"**Period Cost:** <span class='{cw}'>${weekly_c:.2f}</span>", unsafe_allow_html=True)
-        with cr:
-            ct = "cost-high" if curr['total_cost'] > 100 else "cost-normal"
-            st.markdown(f"**Total System Cost:** <span class='{ct}'>${curr['total_cost']:.2f}</span>", unsafe_allow_html=True)
-
-        with st.container(border=True):
-            if curr['order_placed'] is None:
-                val = st.number_input("Submit Procurement Order", min_value=0, step=1, value=4)
-                if st.button("AUTHORIZE ORDER", type="primary", use_container_width=True):
-                    supabase.table("beer_game").update({"order_placed": val}).eq("id", curr['id']).execute()
-                    process_team_advance(st.session_state.team, wk)
-                    st.rerun()
-            else:
-                st.success("🚚 Order Dispatched. Waiting for other units to sync..."); time.sleep(5); st.rerun()
-
-# --- WINDOW 4: INSTRUCTOR DASHBOARD ---
-elif st.session_state.page == "instructor_dashboard":
-    st.title("🛡️ COMMAND CENTER")
-    if st.text_input("Admin Credentials", type="password") == "beer123":
-        c1, c2 = st.columns(2)
-        with c1:
-            btn_txt = "⏹️ HALT GAME" if game_active else "▶️ START GAME"
-            if st.button(btn_txt, type="primary", use_container_width=True):
-                supabase.table("game_settings").update({"game_active": not game_active}).eq("id", 1).execute(); st.rerun()
-        with c2:
-            if st.button("♻️ FULL GRID RESET", use_container_width=True):
-                supabase.table("beer_game").delete().neq("week", -1).execute()
-                for t in ["A", "B", "C"]:
-                    for r in ["Retailer", "Wholesaler", "Distributor", "Manufacturer"]:
-                        supabase.table("beer_game").insert({"team":t,"role":r,"week":1,"inventory":12,"backlog":0,"total_cost":0,"player_name":None}).execute()
-                supabase.table("game_settings").update({"game_active": False, "current_demand": 4}).eq("id", 1).execute()
-                st.rerun()
-
-        # Lobby View
-        st.divider()
-        st.subheader("👥 Personnel Roster")
-        roster = supabase.table("beer_game").select("team", "role", "player_name").neq("player_name", "null").order("team").execute()
-        if roster.data: st.table(pd.DataFrame(roster.data).drop_duplicates())
-
-        # Analytics (Graphs)
-        st.divider()
-        st.subheader("📈 Live Network Analytics")
-        graph_data = supabase.table("beer_game").select("*").order("week").execute()
-        if graph_data.data:
-            df = pd.DataFrame(graph_data.data)
-            t_sel = st.selectbox("Select Team to Analyze", ["A", "B", "C"])
-            tdf = df[df['team'] == t_sel]
-            tabs = st.tabs(["Inventory", "Orders", "Costs"])
-            with tabs[0]: st.line_chart(tdf.pivot_table(index='week', columns='role', values='inventory', aggfunc='max'))
-            with tabs[1]: st.line_chart(tdf.pivot_table(index='week', columns='role', values='order_placed', aggfunc='max'))
-            with tabs[2]: st.line_chart(tdf.pivot_table(index='week', columns='role', values='total_cost', aggfunc='max'))
-
-        # Advancement
-        st.divider()
-        for t in ["A", "B", "C"]:
-            latest = supabase.table("beer_game").select("week").eq("team", t).order("week", desc=True).limit(1).execute()
-            w_num = latest.data[0]['week'] if latest.data else 1
-            if st.button(f"Force Advance Team {t} (Week {w_num})", use_container_width=True):
-                process_team_advance(t, w_num, forced=True); st.rerun()
